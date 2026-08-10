@@ -18,20 +18,15 @@ jobs:
       - name: Install Tools and Android NDK
         run: |
           sudo apt update
-          sudo apt install -y git python3 curl ninja-build meson
-          
-          # Нам нужен компилятор GN. Скачиваем его бинарник напрямую
-          curl -Lo gn-bin.zip https://appspot.com
-          sudo unzip gn-bin.zip -d /usr/local/bin/
-          sudo chmod +x /usr/local/bin/gn
+          # Устанавливаем официальный компилятор generate-ninja (gn) прямо из репозиторией Ubuntu
+          sudo apt install -y git python3 curl ninja-build generate-ninja
 
       - name: Clone ANGLE Directly from GitHub
         run: |
-          # Клонируем официальное зеркало ANGLE без промежуточных depot_tools
           git clone --depth 1 https://github.com angle-src
-          
           cd angle-src
-          # Скачиваем только базовые необходимые зависимости для Android сборки
+          
+          # Скачиваем три критические Vulkan-зависимости, без которых GN не создаст конфиг
           git clone --depth 1 https://googlesource.com third_party/vulkan-deps
           git clone --depth 1 https://googlesource.com third_party/glslang
           git clone --depth 1 https://googlesource.com third_party/spirv-tools
@@ -39,6 +34,11 @@ jobs:
       - name: Generate GN Config
         run: |
           cd angle-src
+          
+          # Указываем путь к Android NDK, который уже встроен в систему GitHub Actions по умолчанию
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk-bundle"
+          
+          # Запускаем системный компилятор gn
           gn gen out/Android --args="
             target_os=\"android\"
             target_cpu=\"arm\"
@@ -49,6 +49,7 @@ jobs:
             angle_enable_gl=false
             is_component_build=false
             symbol_level=0
+            android_ndk_root=\"$ANDROID_NDK_HOME\"
           "
 
       - name: Compile
