@@ -20,32 +20,34 @@ jobs:
           sudo apt update
           sudo apt install -y git python3 curl ninja-build
 
-      - name: Setup Google Depot Tools (Automated Action)
-        # Используем проверенный готовый экшен сообщества для интеграции depot_tools
-        uses: patchw/setup-depot-tools@v1
-
-      - name: Bootstrap ANGLE Source (SPEED OPTIMIZED)
+      - name: Setup Depot Tools and Bootstrap ANGLE (MONOLITHIC RUN)
         run: |
+          # 1. Локально разворачиваем depot_tools прямо в рабочее окружение
+          git clone --depth 1 https://googlesource.com $GITHUB_WORKSPACE/depot_tools
+          
+          # Настраиваем переменные путей и отключаем сбор метрик Google
+          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
           export DEPOT_TOOLS_METRICS=0
           
+          # 2. Скачиваем актуальный исходный код ANGLE
           mkdir angle-build && cd angle-build
-          
-          # Скачиваем только актуальный срез кода ANGLE без гигабайт истории коммитов
           fetch --no-history --no-bootstrap angle
           
           cd angle
           
-          # Синхронизируем зависимости в режиме shallow (без лишней истории Git)
+          # 3. Синхронизируем зависимости (без тяжелых тестов dEQP и истории изменений)
           gclient sync --no-history --shallow --nohooks
           
-          # Скачиваем официальный Android NDK и SDK, необходимые для компиляции
+          # 4. Выкачиваем официальный Android NDK / SDK от Google
           gclient runhooks
 
       - name: Generate Build Files (GN)
         run: |
+          # Подключаем ранее скачанный depot_tools к текущему шагу
+          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
           cd angle-build/angle
           
-          # Жестко фиксируем сборку под 32-битный ARM (target_cpu="arm")
+          # Генерируем конфигурацию компиляции под 32-битный ARM
           gn gen out/Android --args="
             target_os=\"android\"
             target_cpu=\"arm\"
@@ -61,9 +63,10 @@ jobs:
 
       - name: Compile Libraries (MAX THREADS)
         run: |
+          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
           cd angle-build/angle
           
-          # Задействуем все доступные процессорные ядра виртуальной машины GitHub
+          # Компилируем libEGL и libGLESv2 на всех ядрах виртуальной машины
           CORES=$(nproc)
           ninja -C out/Android -j $CORES libEGL libGLESv2
 
