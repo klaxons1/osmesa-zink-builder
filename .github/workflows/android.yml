@@ -1,53 +1,44 @@
-name: Fast Build ANGLE for Android (ARM 32-bit Only)
+name: Pure Direct Build ANGLE
 
 on:
   [push, pull_request, workflow_dispatch]
 
 jobs:
   build:
-    name: "Build ANGLE for ARM 32-bit"
+    name: "Direct Compile ARM32"
     runs-on: ubuntu-latest
 
     steps:
-      - name: Maximize build space
+      - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
 
-      - name: Install System Dependencies
+      - name: Install Tools and Android NDK
         run: |
           sudo apt update
-          sudo apt install -y git python3 curl ninja-build
+          sudo apt install -y git python3 curl ninja-build meson
+          
+          # Нам нужен компилятор GN. Скачиваем его бинарник напрямую
+          curl -Lo gn-bin.zip https://appspot.com
+          sudo unzip gn-bin.zip -d /usr/local/bin/
+          sudo chmod +x /usr/local/bin/gn
 
-      - name: Setup Depot Tools and Bootstrap ANGLE (MONOLITHIC RUN)
+      - name: Clone ANGLE Directly from GitHub
         run: |
-          # 1. Локально разворачиваем depot_tools прямо в рабочее окружение
-          git clone --depth 1 https://googlesource.com $GITHUB_WORKSPACE/depot_tools
+          # Клонируем официальное зеркало ANGLE без промежуточных depot_tools
+          git clone --depth 1 https://github.com angle-src
           
-          # Настраиваем переменные путей и отключаем сбор метрик Google
-          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
-          export DEPOT_TOOLS_METRICS=0
-          
-          # 2. Скачиваем актуальный исходный код ANGLE
-          mkdir angle-build && cd angle-build
-          fetch --no-history --no-bootstrap angle
-          
-          cd angle
-          
-          # 3. Синхронизируем зависимости (без тяжелых тестов dEQP и истории изменений)
-          gclient sync --no-history --shallow --nohooks
-          
-          # 4. Выкачиваем официальный Android NDK / SDK от Google
-          gclient runhooks
+          cd angle-src
+          # Скачиваем только базовые необходимые зависимости для Android сборки
+          git clone --depth 1 https://googlesource.com third_party/vulkan-deps
+          git clone --depth 1 https://googlesource.com third_party/glslang
+          git clone --depth 1 https://googlesource.com third_party/spirv-tools
 
-      - name: Generate Build Files (GN)
+      - name: Generate GN Config
         run: |
-          # Подключаем ранее скачанный depot_tools к текущему шагу
-          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
-          cd angle-build/angle
-          
-          # Генерируем конфигурацию компиляции под 32-битный ARM
+          cd angle-src
           gn gen out/Android --args="
             target_os=\"android\"
             target_cpu=\"arm\"
@@ -58,22 +49,17 @@ jobs:
             angle_enable_gl=false
             is_component_build=false
             symbol_level=0
-            strip_absolute_paths_from_debug_symbols=true
           "
 
-      - name: Compile Libraries (MAX THREADS)
+      - name: Compile
         run: |
-          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
-          cd angle-build/angle
-          
-          # Компилируем libEGL и libGLESv2 на всех ядрах виртуальной машины
-          CORES=$(nproc)
-          ninja -C out/Android -j $CORES libEGL libGLESv2
+          cd angle-src
+          ninja -C out/Android -j $(nproc) libEGL libGLESv2
 
-      - name: Upload ANGLE Artifacts
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: angle_arm32
+          name: angle_arm32_fixed
           path: |
-            angle-build/angle/out/Android/lib.unstripped/libEGL.so
-            angle-build/angle/out/Android/lib.unstripped/libGLESv2.so
+            angle-src/out/Android/lib.unstripped/libEGL.so
+            angle-src/out/Android/lib.unstripped/libGLESv2.so
