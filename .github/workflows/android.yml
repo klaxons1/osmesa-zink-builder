@@ -1,16 +1,11 @@
-name: Fast Build ANGLE for Android
+name: Fast Build ANGLE for Android (ARM 32-bit Only)
 
 on:
   [push, pull_request, workflow_dispatch]
 
 jobs:
   build:
-    strategy:
-      matrix:
-        arch: [ "arm64", "arm" ] 
-      fail-fast: false
-
-    name: "Build ANGLE for ${{ matrix.arch }}"
+    name: "Build ANGLE for ARM 32-bit"
     runs-on: ubuntu-latest
 
     steps:
@@ -27,29 +22,19 @@ jobs:
 
       - name: Install Google Depot Tools (Fixed URL)
         run: |
-          # Исправлен URL клонирования depot_tools
           git clone --depth 1 https://googlesource.com
           echo "$GITHUB_WORKSPACE/depot_tools" >> $GITHUB_PATH
 
       - name: Bootstrap ANGLE Source (SPEED OPTIMIZED)
         run: |
           export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
-          
-          # Отключаем отправку метрик Google для экономии времени
           export DEPOT_TOOLS_METRICS=0
           
           mkdir angle-build && cd angle-build
-          
-          # Клонируем ТОЛЬКО ANGLE без истории (-no-history) и без тяжелых тестов dEQP
           fetch --no-history --no-bootstrap angle
           
           cd angle
-          
-          # Синхронизируем зависимости БЕЗ истории Git (--no-history)
-          # --shallow загружает только последний коммит, экономя гигабайты трафика
           gclient sync --no-history --shallow --nohooks
-          
-          # Запускаем только критические хуки (скачивание компиляторов и NDK)
           gclient runhooks
 
       - name: Generate Build Files (GN)
@@ -57,12 +42,10 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
           cd angle-build/angle
           
-          TARGET_CPU="${{ matrix.arch }}"
-          
-          # Оптимизируем аргументы GN: отключаем тесты, ассерты и генерацию лишних утилит
+          # Жестко фиксируем архитектуру arm (32-bit)
           gn gen out/Android --args="
             target_os=\"android\"
-            target_cpu=\"$TARGET_CPU\"
+            target_cpu=\"arm\"
             is_debug=false
             dcheck_always_on=false
             angle_build_all=false
@@ -78,16 +61,13 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
           cd angle-build/angle
           
-          # Узнаем количество ядер процессора на виртуалке GitHub
           CORES=$(nproc)
-          
-          # Запускаем компиляцию строго целевых библиотек в максимальное число потоков
           ninja -C out/Android -j $CORES libEGL libGLESv2
 
       - name: Upload ANGLE Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: angle_${{ matrix.arch }}
+          name: angle_arm32
           path: |
             angle-build/angle/out/Android/lib.unstripped/libEGL.so
             angle-build/angle/out/Android/lib.unstripped/libGLESv2.so
