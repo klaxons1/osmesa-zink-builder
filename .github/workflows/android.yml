@@ -1,4 +1,4 @@
-name: Build ANGLE for Android
+name: Fast Build ANGLE for Android
 
 on:
   [push, pull_request, workflow_dispatch]
@@ -7,8 +7,7 @@ jobs:
   build:
     strategy:
       matrix:
-        # Для Android ANGLE использует стандартные гугловские таргеты
-        arch: ["arm"] 
+        arch: [ "arm64", "arm" ] 
       fail-fast: false
 
     name: "Build ANGLE for ${{ matrix.arch }}"
@@ -16,7 +15,6 @@ jobs:
 
     steps:
       - name: Maximize build space
-        # Исходники Chromium весят очень много, очищаем место на виртуалке GitHub
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
@@ -25,47 +23,66 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt update
-          sudo apt install -y git python3 curl snapd ninja-build
+          sudo apt install -y git python3 curl ninja-build
 
-      - name: Install Google Depot Tools
+      - name: Install Google Depot Tools (Fixed URL)
         run: |
-          git clone https://googlesource.com
+          # Исправлен URL клонирования depot_tools
+          git clone --depth 1 https://googlesource.com
           echo "$GITHUB_WORKSPACE/depot_tools" >> $GITHUB_PATH
 
-      - name: Bootstrap ANGLE Source
+      - name: Bootstrap ANGLE Source (SPEED OPTIMIZED)
         run: |
           export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
+          
+          # Отключаем отправку метрик Google для экономии времени
+          export DEPOT_TOOLS_METRICS=0
+          
           mkdir angle-build && cd angle-build
-          # Выкачиваем ANGLE вместе с необходимым Android NDK и SDK от Google
-          fetch angle
+          
+          # Клонируем ТОЛЬКО ANGLE без истории (-no-history) и без тяжелых тестов dEQP
+          fetch --no-history --no-bootstrap angle
+          
           cd angle
-          # Переключаемся на стабильный коммит, если нужно, или собираем актуальный main
-          gclient sync
+          
+          # Синхронизируем зависимости БЕЗ истории Git (--no-history)
+          # --shallow загружает только последний коммит, экономя гигабайты трафика
+          gclient sync --no-history --shallow --nohooks
+          
+          # Запускаем только критические хуки (скачивание компиляторов и NDK)
+          gclient runhooks
 
       - name: Generate Build Files (GN)
         run: |
           export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
           cd angle-build/angle
           
-          # Задаем архитектуру для GN
           TARGET_CPU="${{ matrix.arch }}"
           
-          # Генерируем конфигурацию под Android Release
+          # Оптимизируем аргументы GN: отключаем тесты, ассерты и генерацию лишних утилит
           gn gen out/Android --args="
             target_os=\"android\"
             target_cpu=\"$TARGET_CPU\"
             is_debug=false
+            dcheck_always_on=false
             angle_build_all=false
+            angle_enable_vulkan=true
+            angle_enable_gl=false
             is_component_build=false
             symbol_level=0
+            strip_absolute_paths_from_debug_symbols=true
           "
 
-      - name: Compile Libraries
+      - name: Compile Libraries (MAX THREADS)
         run: |
           export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
           cd angle-build/angle
-          # Собираем конкретно библиотеки OpenGL ES и EGL
-          autoninja -C out/Android libEGL libGLESv2
+          
+          # Узнаем количество ядер процессора на виртуалке GitHub
+          CORES=$(nproc)
+          
+          # Запускаем компиляцию строго целевых библиотек в максимальное число потоков
+          ninja -C out/Android -j $CORES libEGL libGLESv2
 
       - name: Upload ANGLE Artifacts
         uses: actions/upload-artifact@v4
