@@ -1,4 +1,4 @@
-name: Build Android
+name: Build ANGLE for Android
 
 on:
   [push, pull_request, workflow_dispatch]
@@ -7,47 +7,70 @@ jobs:
   build:
     strategy:
       matrix:
-        arch: [ "arm32"]
+        # Для Android ANGLE использует стандартные гугловские таргеты
+        arch: ["arm"] 
       fail-fast: false
 
-    name: "Build for ${{matrix.arch}}"
-
+    name: "Build ANGLE for ${{ matrix.arch }}"
     runs-on: ubuntu-latest
 
-    steps:        
-      - uses: actions/checkout@v4
+    steps:
+      - name: Maximize build space
+        # Исходники Chromium весят очень много, очищаем место на виртуалке GitHub
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
 
-      - name: Build
+      - name: Install System Dependencies
         run: |
           sudo apt update
-          sudo apt install -y meson python3-mako libxrandr-dev libxxf86vm-dev libxcb-*-dev libx11-xcb-dev libxfixes-dev libdrm-dev libx11-dev
-          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk-bundle"
-          envsubst <android-${{matrix.arch}} >build-crossfile
-          git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git
-          cd mesa
-          git apply --reject --whitespace=fix ../mesa-zink.diff || echo "git apply failed"
-          meson setup "build-android" \
-            --prefix=/tmp/zink \
-            --cross-file "../build-crossfile" \
-            -Dplatforms=android \
-            -Dplatform-sdk-version=25 \
-            -Dandroid-stub=true \
-            -Dllvm=disabled \
-            -Dxlib-lease=disabled \
-            -Degl=disabled \
-            -Dgbm=disabled \
-            -Dglx=disabled \
-            -Dopengl=true \
-            -Dosmesa=true \
-            -Dvulkan-drivers= \
-            -Dgallium-drivers=zink \
-            -Dshared-glapi=false \
-            -Dandroid-libbacktrace=disabled \
-            -Dbuildtype=release
-          ninja -C "build-android" install
+          sudo apt install -y git python3 curl snapd ninja-build
 
-      - name: Upload libraries
+      - name: Install Google Depot Tools
+        run: |
+          git clone https://googlesource.com
+          echo "$GITHUB_WORKSPACE/depot_tools" >> $GITHUB_PATH
+
+      - name: Bootstrap ANGLE Source
+        run: |
+          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
+          mkdir angle-build && cd angle-build
+          # Выкачиваем ANGLE вместе с необходимым Android NDK и SDK от Google
+          fetch angle
+          cd angle
+          # Переключаемся на стабильный коммит, если нужно, или собираем актуальный main
+          gclient sync
+
+      - name: Generate Build Files (GN)
+        run: |
+          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
+          cd angle-build/angle
+          
+          # Задаем архитектуру для GN
+          TARGET_CPU="${{ matrix.arch }}"
+          
+          # Генерируем конфигурацию под Android Release
+          gn gen out/Android --args="
+            target_os=\"android\"
+            target_cpu=\"$TARGET_CPU\"
+            is_debug=false
+            angle_build_all=false
+            is_component_build=false
+            symbol_level=0
+          "
+
+      - name: Compile Libraries
+        run: |
+          export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
+          cd angle-build/angle
+          # Собираем конкретно библиотеки OpenGL ES и EGL
+          autoninja -C out/Android libEGL libGLESv2
+
+      - name: Upload ANGLE Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: libzink_${{matrix.arch}}
-          path: /tmp/zink
+          name: angle_${{ matrix.arch }}
+          path: |
+            angle-build/angle/out/Android/lib.unstripped/libEGL.so
+            angle-build/angle/out/Android/lib.unstripped/libGLESv2.so
