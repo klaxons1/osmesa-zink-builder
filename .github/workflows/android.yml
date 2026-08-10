@@ -1,69 +1,53 @@
-name: Pure Direct Build ANGLE
+name: Build Android
 
 on:
   [push, pull_request, workflow_dispatch]
 
 jobs:
   build:
-    name: "Direct Compile ARM32"
+    strategy:
+      matrix:
+        arch: [ "arm32"]
+      fail-fast: false
+
+    name: "Build for ${{matrix.arch}}"
+
     runs-on: ubuntu-latest
 
     steps:
-      - name: Hard Reset GitHub Cache and Free Disk Space
-        run: |
-          # Force purge the runner's internal git and action cache layers
-          rm -rf .git
-          rm -rf .github/workflows/*cache*
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
+      - uses: actions/checkout@v4
 
-      - name: Install Tools and Android NDK
+      - name: Build
         run: |
           sudo apt update
-          sudo apt install -y git python3 curl ninja-build generate-ninja
+          sudo apt install -y bison flex ninja-build python3-mako python3-yaml zlib1g-dev
+          python3 -m pip install --break-system-packages meson
+          export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-$ANDROID_NDK_LATEST_HOME}"
+          envsubst <android-${{matrix.arch}} >build-crossfile
+          git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git
+          cd mesa
+          git apply --reject --whitespace=fix ../mesa-zink.diff || echo "git apply failed"
+          meson setup "build-android" \
+            --prefix=/tmp/zink \
+            --cross-file "../build-crossfile" \
+            -Dplatforms=android \
+            -Dplatform-sdk-version=25 \
+            -Dandroid-stub=true \
+            -Dllvm=disabled \
+            -Dxlib-lease=disabled \
+            -Degl=disabled \
+            -Dgbm=disabled \
+            -Dglx=disabled \
+            -Dopengl=true \
+            -Dosmesa=true \
+            -Dvulkan-drivers= \
+            -Dgallium-drivers=zink \
+            -Dandroid-libbacktrace=disabled \
+            -Dbuildtype=release
+          ninja -C "build-android" install
 
-      - name: Clone ANGLE Dynamically (Cache Evading)
-        run: |
-          # We break the string dynamically so GitHub's parser cannot fetch a cached regex match
-          TARGET_URL="https://github.com"
-          TARGET_REPO="/google/angle.git"
-          
-          git clone --depth 1 "${TARGET_URL}${TARGET_REPO}" angle-src
-          cd angle-src
-          
-          # Clone the required Vulkan dependencies for compilation
-          git clone --depth 1 https://googlesource.com third_party/vulkan-deps
-          git clone --depth 1 https://googlesource.com third_party/glslang
-          git clone --depth 1 https://googlesource.com third_party/spirv-tools
-
-      - name: Generate GN Config
-        run: |
-          cd angle-src
-          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk-bundle"
-          
-          gn gen out/Android --args="
-            target_os=\"android\"
-            target_cpu=\"arm\"
-            is_debug=false
-            dcheck_always_on=false
-            angle_build_all=false
-            angle_enable_vulkan=true
-            angle_enable_gl=false
-            is_component_build=false
-            symbol_level=0
-            android_ndk_root=\"$ANDROID_NDK_HOME\"
-          "
-
-      - name: Compile
-        run: |
-          cd angle-src
-          ninja -C out/Android -j $(nproc) libEGL libGLESv2
-
-      - name: Upload
+      - name: Upload libraries
         uses: actions/upload-artifact@v4
         with:
-          name: angle_arm32_fixed
-          path: |
-            angle-src/out/Android/lib.unstripped/libEGL.so
-            angle-src/out/Android/lib.unstripped/libGLESv2.so
+          name: libzink_${{matrix.arch}}
+          path: /tmp/zink
