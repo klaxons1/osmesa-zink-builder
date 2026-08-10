@@ -22,6 +22,7 @@ jobs:
 
       - name: Install Google Depot Tools (Fixed URL)
         run: |
+          # Используется точный и полный URL репозитория инструментов Google
           git clone --depth 1 https://googlesource.com
           echo "$GITHUB_WORKSPACE/depot_tools" >> $GITHUB_PATH
 
@@ -31,10 +32,16 @@ jobs:
           export DEPOT_TOOLS_METRICS=0
           
           mkdir angle-build && cd angle-build
+          
+          # Скачиваем только актуальный срез кода ANGLE без гигабайт истории коммитов
           fetch --no-history --no-bootstrap angle
           
           cd angle
+          
+          # Синхронизируем зависимости в режиме shallow (без лишней истории Git)
           gclient sync --no-history --shallow --nohooks
+          
+          # Скачиваем официальный Android NDK и SDK, необходимые для компиляции
           gclient runhooks
 
       - name: Generate Build Files (GN)
@@ -42,7 +49,7 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
           cd angle-build/angle
           
-          # Жестко фиксируем архитектуру arm (32-bit)
+          # Жестко фиксируем сборку под 32-битный ARM (target_cpu="arm")
           gn gen out/Android --args="
             target_os=\"android\"
             target_cpu=\"arm\"
@@ -61,6 +68,7 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/depot_tools:$PATH"
           cd angle-build/angle
           
+          # Задействуем все доступные процессорные ядра виртуальной машины GitHub
           CORES=$(nproc)
           ninja -C out/Android -j $CORES libEGL libGLESv2
 
